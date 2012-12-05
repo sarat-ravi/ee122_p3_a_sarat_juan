@@ -18,7 +18,7 @@ class Firewall (object):
     Constructor.
     Put your initialization code here.
     """
-    log.debug("Firewall initialized.")
+    log.debug("Firewall initialized. Hello")
 
   def _handle_ConnectionIn (self, event, flow, packet):
     """
@@ -26,7 +26,11 @@ class Firewall (object):
     You can alter what happens with the connection by altering the
     action property of the event.
     """
-    log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+    
+    connection = "[" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]"
+
+
+    log.debug("Allowed Connection %s" %(str(connection))  )
     event.action.forward = True
 
   def _handle_DeferredConnectionIn (self, event, flow, packet):
