@@ -18,11 +18,23 @@ class Firewall (object):
         Constructor.
         """
         log.debug("Firewall initialized. Hello")
+
+        # list [123, 456, 789]
         self.banned_ports = self.get_banned_port_numbers()
+
+        # list ["google", "amazon", "bing"]
         self.banned_domains_raw = self.get_banned_domains()
         self.banned_domains = [item.split(".")[-2] for item in self.banned_domains_raw]
+
+        # dict {<ip>: [<search_string>, <search_string2>, ...]}
+        self.monitored_strings = self.get_monitored_strings()
+
+        # dict {<ip>: True}
         self.banned_ips = {}
+
+        self.var_log("Banned Ports", self.banned_ports)
         self.var_log("Banned Domains", self.banned_domains)
+        self.var_log("Monitored Strings", self.monitored_strings)
 
     def monitor_request(self, packet):
         """
@@ -37,32 +49,6 @@ class Firewall (object):
         based on this packet's domain_name details
         """
         self.monitor_domain(packet=packet)
-
-    def _handle_MonitorData(self, event, packet, reverse):
-        """
-        Monitoring event handler.
-        Called when data passes over the connection if monitoring
-        has been enabled by a prior event handler.
-        """
-        if reverse:
-            """
-            Monitor Incoming Packets
-            """
-            #log.debug("Monitoring Reverse")
-            # IP bans invalid domain name responses
-            self.monitor_response(packet=packet)
-        else:
-            """
-            Monitor Outgoing Packets
-            """
-            #log.debug("Monitoring Forward")
-            # IP bans invalid domain name requests
-            self.monitor_request(packet=packet)
-
-        """
-        Common Case Code Here: to run for both forward and reverse cases
-        """
-        return
 
     def _handle_ConnectionIn (self, event, flow, packet):
         """
@@ -116,6 +102,125 @@ class Firewall (object):
         """
         pass
 
+    def _handle_MonitorData(self, event, packet, reverse):
+        """
+        Monitoring event handler.
+        Called when data passes over the connection if monitoring
+        has been enabled by a prior event handler.
+        """
+        if reverse:
+            """
+            Monitor Incoming Packets
+            """
+            #log.debug("Monitoring Reverse")
+            # IP bans invalid domain name responses
+            self.monitor_response(packet=packet)
+        else:
+            """
+            Monitor Outgoing Packets
+            """
+            #log.debug("Monitoring Forward")
+            # IP bans invalid domain name requests
+            self.monitor_request(packet=packet)
+
+        """
+        Common Case Code Here: to run for both forward and reverse cases
+        """
+        return
+
+
+    def monitor_domain(self, packet):
+        """
+        adds domain to naughty list when appropriate
+        """
+        # bans this ip as it maps to a banned domain
+        domain_name = self.get_domain_name_from_packet(packet=packet)
+        if self.is_banned_domain(domain=domain_name):
+            ip = packet.payload.dstip
+            self.banned_ips[str(ip)] = True
+            log.debug("Denied Connection to %s" %(str(ip)))
+
+    def is_banned_domain(self, domain):
+        """
+        figures out if domain name is banned
+        """
+        if not domain:
+            return False
+
+        banned = domain in self.banned_domains
+        return banned
+
+    def get_domain_name_from_packet(self, packet):
+        """
+        gets domain name from http data, returns None if unparsable
+        """
+        # get domain name
+        http_info = self.get_http_info(packet=packet)
+        domain_name = http_info["domain_name"]
+        hostname = None 
+
+        # Log every nontrivial domain requested
+        if not domain_name == '':
+            hostname = domain_name.split(".")[-2]
+            self.var_log("Domain Name", hostname)
+
+        return hostname
+
+    def get_monitored_strings(self):
+        """
+        reads monitored-strings.txt and returns a dict
+        {<ip_addr>: [<string1>, <string2>, ...]}
+        """
+
+        f = open("/root/pox/ext/monitored-strings.txt", "r")
+        lines = f.readlines() 
+        f.flush()
+        f.close()
+
+        monitored_strings = {}
+
+        for line in lines:
+            line = line.strip()
+
+            ip, search_string = line.split(":")
+
+            # init if not already
+            if not ip in monitored_strings:
+                monitored_strings[ip] = []
+
+            # append to list
+            monitored_strings[ip].append(search_string) 
+
+        return monitored_strings
+
+    def get_banned_port_numbers(self):
+        """
+        parses file and returns a list of banned ports
+        """
+        filename = "/root/pox/ext/banned-ports.txt"
+        f = open(filename, 'r')
+        lines = f.readlines()
+
+        f.flush()
+        f.close()
+
+        ports = [int(line) for line in lines]
+        return ports
+
+    def get_banned_domains(self):
+        """
+        parses file and returns list of banned domains
+        """
+        filename = "/root/pox/ext/banned-domains.txt"
+        f = open(filename, 'r')
+        domains = f.readlines()
+
+        f.flush()
+        f.close()
+
+        domains = [str(domain.strip()) for domain in domains] 
+        return domains
+
     def var_log(self, name, message, caller="ConnectionIn"):
         string = "(%s) \t %s = %s" %(str(caller),
                 str(name),
@@ -146,27 +251,6 @@ class Firewall (object):
         log.debug("--------------------------------------------------------------------------")
         log.debug("")
 
-    def get_banned_port_numbers(self):
-        """
-        parses file and returns a list of banned ports
-        """
-        filename = "/root/pox/ext/banned-ports.txt"
-        f = open(filename, 'r')
-        lines = f.readlines()
-
-        ports = [int(line) for line in lines]
-        return ports
-
-    def get_banned_domains(self):
-        """
-        parses file and returns list of banned domains
-        """
-        filename = "/root/pox/ext/banned-domains.txt"
-        f = open(filename, 'r')
-        domains = f.readlines()
-
-        domains = [str(domain.strip()) for domain in domains] 
-        return domains
 
     def unpack_ethernet_packet(self, packet):
         """
@@ -197,42 +281,7 @@ class Firewall (object):
         result_dict["domain_name"] = domain
         return result_dict
 
-    def is_banned_domain(self, domain):
-        """
-        figures out if domain name is banned
-        """
-        if not domain:
-            return False
 
-        banned = domain in self.banned_domains
-        return banned
-
-    def get_domain_name_from_packet(self, packet):
-        """
-        gets domain name from http data, returns None if unparsable
-        """
-        # get domain name
-        http_info = self.get_http_info(packet=packet)
-        domain_name = http_info["domain_name"]
-        hostname = None 
-
-        # Log every nontrivial domain requested
-        if not domain_name == '':
-            hostname = domain_name.split(".")[-2]
-            self.var_log("Domain Name", hostname)
-
-        return hostname
-
-    def monitor_domain(self, packet):
-        """
-        adds domain to naughty list when appropriate
-        """
-        # bans this ip as it maps to a banned domain
-        domain_name = self.get_domain_name_from_packet(packet=packet)
-        if self.is_banned_domain(domain=domain_name):
-            ip = packet.payload.dstip
-            self.banned_ips[str(ip)] = True
-            log.debug("Denied Connection to %s" %(str(ip)))
 
 
 
