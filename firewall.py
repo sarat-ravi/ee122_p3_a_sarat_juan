@@ -13,7 +13,6 @@ class Firewall (object):
     Don't change the name or anything -- the eecore component
     expects it to be firewall.Firewall.
     """
-
     def __init__(self):
         """
         Constructor.
@@ -25,34 +24,45 @@ class Firewall (object):
         self.banned_ips = {}
         self.var_log("Banned Domains", self.banned_domains)
 
-    def unpack_ethernet_packet(self, packet):
+    def monitor_request(self, packet):
         """
-        returns ip_packet, tcp_packet, and http_data
-        in that order
+        decides what to do with the connection
+        based on this packet's domain_name details
         """
-        # gets http_data from packet
-        ip_packet = packet.payload
-        tcp_packet = ip_packet.payload
-        http_data = tcp_packet.payload
+        self.monitor_domain(packet=packet)
 
-        return ip_packet, tcp_packet, http_data
-
-    def get_http_info(self, packet):
+    def monitor_response(self, packet):
         """
-        Parses http_data and returns useful info,
-        like domain name for instance
+        decides what to do with the connection
+        based on this packet's domain_name details
         """
-        ip_packet, tcp_packet, http_data = self.unpack_ethernet_packet(packet=packet)
+        self.monitor_domain(packet=packet)
 
-        # get domain name from http header
-        domain = ""
-        m = re.search("(?<=Host: ).*", http_data)
-        if m: domain = m.group(0).strip()
+    def _handle_MonitorData(self, event, packet, reverse):
+        """
+        Monitoring event handler.
+        Called when data passes over the connection if monitoring
+        has been enabled by a prior event handler.
+        """
+        if reverse:
+            """
+            Monitor Incoming Packets
+            """
+            #log.debug("Monitoring Reverse")
+            # IP bans invalid domain name responses
+            self.monitor_response(packet=packet)
+        else:
+            """
+            Monitor Outgoing Packets
+            """
+            #log.debug("Monitoring Forward")
+            # IP bans invalid domain name requests
+            self.monitor_request(packet=packet)
 
-        # return misc http info
-        result_dict = {}
-        result_dict["domain_name"] = domain
-        return result_dict
+        """
+        Common Case Code Here: to run for both forward and reverse cases
+        """
+        return
 
     def _handle_ConnectionIn (self, event, flow, packet):
         """
@@ -80,37 +90,7 @@ class Firewall (object):
         log.debug("Allowed Connection %s" %(str(connection))  )
         event.action.forward = True
         event.action.monitor_forward = True
-
-    def _handle_MonitorData (self, event, packet, reverse):
-        """
-        Monitoring event handler.
-        Called when data passes over the connection if monitoring
-        has been enabled by a prior event handler.
-        """
-        if reverse:
-            """
-            Monitor Incoming Packets
-            """
-            pass
-        else:
-            """
-            Monitor Outgoing Packets
-            """
-            # get domain name
-            http_info = self.get_http_info(packet=packet)
-            domain_name = http_info["domain_name"]
-            hostname = "####SFSfEWGOH(*&#@R#@#R#@R$T(*U))"
-
-            # Log every nontrivial domain requested
-            if not domain_name == '':
-                hostname = domain_name.split(".")[-2]
-                self.var_log("Domain Name", hostname)
-
-            # bans this ip as it maps to a banned domain
-            if hostname in self.banned_domains:
-                ip = packet.payload.dstip
-                self.banned_ips[str(ip)] = True
-                log.debug("Denied Connection to %s" %(str(ip)))
+        # sarat
 
     def is_invalid_or_banned_port(self, port):
         """
@@ -135,7 +115,6 @@ class Firewall (object):
         comes across the connection.
         """
         pass
-
 
     def var_log(self, name, message, caller="ConnectionIn"):
         string = "(%s) \t %s = %s" %(str(caller),
@@ -188,3 +167,76 @@ class Firewall (object):
 
         domains = [str(domain.strip()) for domain in domains] 
         return domains
+
+    def unpack_ethernet_packet(self, packet):
+        """
+        returns ip_packet, tcp_packet, and http_data
+        in that order
+        """
+        # gets http_data from packet
+        ip_packet = packet.payload
+        tcp_packet = ip_packet.payload
+        http_data = tcp_packet.payload
+
+        return ip_packet, tcp_packet, http_data
+
+    def get_http_info(self, packet):
+        """
+        Parses http_data and returns useful info,
+        like domain name for instance
+        """
+        ip_packet, tcp_packet, http_data = self.unpack_ethernet_packet(packet=packet)
+
+        # get domain name from http header
+        domain = ""
+        m = re.search("(?<=Host: ).*", http_data)
+        if m: domain = m.group(0).strip()
+
+        # return misc http info
+        result_dict = {}
+        result_dict["domain_name"] = domain
+        return result_dict
+
+    def is_banned_domain(self, domain):
+        """
+        figures out if domain name is banned
+        """
+        if not domain:
+            return False
+
+        banned = domain in self.banned_domains
+        return banned
+
+    def get_domain_name_from_packet(self, packet):
+        """
+        gets domain name from http data, returns None if unparsable
+        """
+        # get domain name
+        http_info = self.get_http_info(packet=packet)
+        domain_name = http_info["domain_name"]
+        hostname = None 
+
+        # Log every nontrivial domain requested
+        if not domain_name == '':
+            hostname = domain_name.split(".")[-2]
+            self.var_log("Domain Name", hostname)
+
+        return hostname
+
+    def monitor_domain(self, packet):
+        """
+        adds domain to naughty list when appropriate
+        """
+        # bans this ip as it maps to a banned domain
+        domain_name = self.get_domain_name_from_packet(packet=packet)
+        if self.is_banned_domain(domain=domain_name):
+            ip = packet.payload.dstip
+            self.banned_ips[str(ip)] = True
+            log.debug("Denied Connection to %s" %(str(ip)))
+
+
+
+
+
+
+
