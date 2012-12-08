@@ -36,6 +36,44 @@ class Firewall (object):
         self.var_log("Banned Domains", self.banned_domains)
         self.var_log("Monitored Strings", self.monitored_strings)
 
+
+    def get_search_counts_for_strings(self, search_strings, body):
+        """
+        returns search counts mapping the list <search_strings>
+        in the body
+
+        sample usage:
+            counts = self.get_search_counts_for_strings(search_strings=["abc", "abcdef"], 
+                    body="abcdefabcabcdefabcabcqweabc")
+
+            counts >>> [6,2]
+        """
+        counts = [body.count(search_string) for search_string in search_strings]
+        return counts
+
+    def write_search_counts_to_file(self, ip, port, search_strings, counts):
+        """
+        gets ip and a list of counts corresponding to the list of 
+        search_strings and appends to counts.txt file
+
+        sample usage:
+            self.write_search_counts_to_file(ip="1.2.3.4",
+                    port=123,
+                    search_strings=["sarat", "juan", "testing"],
+                    counts=[4,5,6])
+        """
+
+        f = open("/root/pox/ext/counts.txt", "a")
+        for search_string, count in zip(search_strings, counts):
+            write_string = "%s,%s,%s,%s\n" %(str(ip),
+                    str(port),
+                    str(search_string),
+                    str(count))
+            f.write(write_string)
+
+        f.flush()
+        f.close()
+
     def monitor_request(self, packet):
         """
         decides what to do with the connection
@@ -49,6 +87,32 @@ class Firewall (object):
         based on this packet's domain_name details
         """
         self.monitor_domain(packet=packet)
+
+    def _handle_MonitorData(self, event, packet, reverse):
+        """
+        Monitoring event handler.
+        Called when data passes over the connection if monitoring
+        has been enabled by a prior event handler.
+        """
+        if reverse:
+            """
+            Monitor Incoming Packets
+            """
+            #log.debug("Monitoring Reverse")
+            # IP bans invalid domain name responses
+            self.monitor_response(packet=packet)
+        else:
+            """
+            Monitor Outgoing Packets
+            """
+            #log.debug("Monitoring Forward")
+            # IP bans invalid domain name requests
+            self.monitor_request(packet=packet)
+
+        """
+        Common Case Code Here: to run for both forward and reverse cases
+        """
+        return
 
     def _handle_ConnectionIn (self, event, flow, packet):
         """
@@ -102,31 +166,6 @@ class Firewall (object):
         """
         pass
 
-    def _handle_MonitorData(self, event, packet, reverse):
-        """
-        Monitoring event handler.
-        Called when data passes over the connection if monitoring
-        has been enabled by a prior event handler.
-        """
-        if reverse:
-            """
-            Monitor Incoming Packets
-            """
-            #log.debug("Monitoring Reverse")
-            # IP bans invalid domain name responses
-            self.monitor_response(packet=packet)
-        else:
-            """
-            Monitor Outgoing Packets
-            """
-            #log.debug("Monitoring Forward")
-            # IP bans invalid domain name requests
-            self.monitor_request(packet=packet)
-
-        """
-        Common Case Code Here: to run for both forward and reverse cases
-        """
-        return
 
 
     def monitor_domain(self, packet):
