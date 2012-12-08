@@ -146,6 +146,7 @@ class Firewall (object):
 
         # TODO: Create a timer to nuke the dict entry above
         # NOTE: This "time" must somehow be extended based on "last_modified"
+        # NOTE: the search query must be run when the connection dies!!
 
     def setup_connection(self, flow=None, packet=None):
         """
