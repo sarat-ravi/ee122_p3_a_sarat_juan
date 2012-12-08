@@ -2,6 +2,7 @@ from pox.core import core
 from pox.lib.addresses import *
 from pox.lib.packet import *
 import re
+import time
 
 # Get a logger
 log = core.getLogger("fw")
@@ -32,9 +33,12 @@ class Firewall (object):
         # dict {<ip>: True}
         self.banned_ips = {}
 
+        # dict {<connection_tuple>: <connection_info_dict>}
+        self.connection_data = {}
+
         self.var_log("Banned Ports", self.banned_ports)
         self.var_log("Banned Domains", self.banned_domains)
-        self.var_log("Monitored Strings", self.monitored_strings)
+        #self.var_log("Monitored Strings", self.monitored_strings)
 
 
     def get_search_counts_for_strings(self, search_strings, body):
@@ -112,7 +116,83 @@ class Firewall (object):
         """
         Common Case Code Here: to run for both forward and reverse cases
         """
+        self.update_connection(packet=packet)
+
         return
+
+    def get_packet_content(self, packet):
+        """
+        takes in a packet and returns the body of the packet, or
+        the http content. This represents the "body" to be searched
+        by the search strings
+        """
+
+        # TODO: actually imlement this
+        return "sarat"
+
+    def update_connection(self, packet):
+        """
+        takes an connection identifier (tuple uniquely identifying connection)
+        and updates the information we have on this connection so far
+        """
+        connection = self.get_connection_identifier(packet=packet)
+        connection_info = self.connection_data[connection]
+        now = time.time()
+
+        packet_content = self.get_packet_content(packet=packet)
+
+        connection_info["last_modified"] = now
+        connection_data["content"] += packet_content
+
+        # TODO: Create a timer to nuke the dict entry above
+        # NOTE: This "time" must somehow be extended based on "last_modified"
+
+    def setup_connection(self, flow=None, packet=None):
+        """
+        1. Takes in either flow or packet object (flow gets first priority), and 
+            Returns n-tuple that uniquely identifies a connection
+
+        2. Inits self.connection_data, which is a dict {<connection_tuple>: <connection_info_dict>}
+
+        """
+        connection = self.get_connection_identifier(flow=flow, packet=packet)
+        now = time.time()
+
+        # collect connection info per connection
+        connection_data = {}
+        connection_data["creation_time"] = now
+        connection_data["last_modified"] = now 
+        connection_data["content"] = ""
+        self.connection_data[connection] = connection_data
+
+        # TODO: Create a timer to nuke the dict entry above
+        # NOTE: This "time" must somehow be extended based on "last_modified"
+
+        return connection
+
+    def get_connection_identifier(self, flow=None, packet=None):
+        """
+        1. Takes in either flow or packet object (flow gets first priority), and 
+            Returns n-tuple that uniquely identifies a connection
+
+        """
+        connection = None
+
+        if flow:
+            connection = (str(flow.src), 
+                    int(flow.srcport), 
+                    str(flow.dst), 
+                    int(flow.dstport))
+        elif packet:
+            # TODO: parse flow details from packet
+            pass
+
+        if connection == None:
+            # This means this function isn't used correctly
+            # raise Exception("Both packet and flow params not found")
+            pass
+
+        return connection
 
     def _handle_ConnectionIn (self, event, flow, packet):
         """
@@ -120,7 +200,7 @@ class Firewall (object):
         You can alter what happens with the connection by altering the
         action property of the event.
         """
-        connection = "[" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]"
+        connection = self.setup_connection(flow=flow, packet=packet) 
         dest_ip = flow.dst
 
         # ban requests for banned domains
@@ -136,9 +216,18 @@ class Firewall (object):
             event.action.deny = True
             return
 
+        # if dest_ip is to be monitored for search strings
+        if str(dest_ip) in self.monitored_strings:
+            log.debug("Monitoring Connection %s for search terms %s" %(str(connection)),
+                    str(self.monitored_strings[str(dest_ip)]))
+            event.action.forward = True
+            event.action.monitor_forward = True
+            event.action.monitor_reverse = True
+            return
+
         # default behavior for every normal connection
         log.debug("Allowed Connection %s" %(str(connection))  )
-        event.action.forward = True
+        event.action.monitor_reverse = True
         event.action.monitor_forward = True
         # sarat
 
