@@ -87,6 +87,8 @@ class Firewall (object):
     Called when data passes over the connection if monitoring
     has been enabled by a prior event handler.
     """
+    log.debug("NOTICE: We should have been monitoring this packet!")
+    data = packet.payload.payload.payload
     srcIP = packet.payload.srcip
     dstIP = packet.payload.dstip
     srcPort = packet.payload.payload.srcport
@@ -103,7 +105,7 @@ class Firewall (object):
       out = False
     #log.debug(str(packet.payload.payload))
     if int(extPort) == 21:
-        m = re.search("227 Entered Passive Mode .*", str(packet.payload.payload.payload))
+        m = re.search("227 Entered Passive Mode .*", str(data))
         if m:            
             newlineraw = m.group(0)
             newline = newlineraw.replace("227 Entered Passive Mode (", "")
@@ -118,7 +120,7 @@ class Firewall (object):
             self.data_sizes[newport] = -1
             #log.debug("NEW ASSIGNED IP: ")  
             #log.debug(assigned_ip)        
-        l = re.search("229 Entering extended passive mode.*", str(packet.payload.payload.payload))
+        l = re.search("229 Entering extended passive mode.*", str(data))
         
         if l:            
             newlineraw = l.group(0)
