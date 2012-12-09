@@ -32,26 +32,40 @@ class Firewall (object):
     """
     dstport = int(flow.dstport)
     dstip = flow.dst
-    if dstport == 21:
-        event.action.forward = True
-        event.action.monitor_forward = True
+    log.debug("destination: " + str(dstip) + ", port: " + str(dstport))
+    if dstport == 21: #check if 21 first
+        # event.action.forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
+        # event.action.monitor_forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
         event.action.monitor_backward = True
     elif dstport in self.allowed_ports.keys():
         if len(self.allowed_ports[dstport]) > 2 and dstip != self.allowed_ports[dstport][2]:
-            event.action.deny = True
+            if dstport > 1023:
+                event.action.deny = True
             #log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+            else:
+                event.action.forward = False
         else:
             event.action.forward = True
-            event.action.monitor_forward = True
-            event.action.monitor_backward = True
+            # event.action.monitor_forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
+            # event.action.monitor_backward = True <- COMMENTED OUT, TEST IF UNNECESSARY
             del self.allowed_ports[dstport]
             #log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+    elif dstport > 1023:
+        log.debug("A connection was blocked " + str(dstip) + " with port number " + str(dtsprt))
+        event.action.deny = True
+    else:
+        event.action.forward = True
+
+    
+    
+'''
     elif dstport <= 1023 and dstport >= 0:
         event.action.forward = True
         #log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
     else:
         event.action.deny = True
         #log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+'''
     
 
   def _handle_DeferredConnectionIn (self, event, flow, packet):
