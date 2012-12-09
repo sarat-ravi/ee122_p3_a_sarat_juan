@@ -50,14 +50,13 @@ class Firewall (object):
             # event.action.monitor_backward = True <- COMMENTED OUT, TEST IF UNNECESSARY
             del self.allowed_ports[dstport]
             #log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+    # REVISIONS, SEE ORIGINAL CODE BELOW:
     elif dstport > 1023:
         log.debug("A connection was blocked " + str(dstip) + " with port number " + str(dtsprt))
         event.action.deny = True
     else:
         event.action.forward = True
-
-    
-    
+# ORIGINAL CODE
 '''
     elif dstport <= 1023 and dstport >= 0:
         event.action.forward = True
