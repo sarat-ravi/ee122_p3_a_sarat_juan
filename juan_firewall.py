@@ -22,6 +22,7 @@ class Firewall (object):
     """
     log.debug("Firewall initialized. Begin testing for Part 2.")
     self.allowed_ports = {}         # [dict] -> ( <destination ip> : <allowed ports> )
+    self.buffer = {}                # [dict] -> ( <source ip> : <buffered ports> )
     self.timers = {}                # [dict] -> ( <<destination ip> : <allowed ports>> : <timer>)
 
   def _handle_ConnectionIn (self, event, flow, packet):
