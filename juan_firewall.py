@@ -20,9 +20,9 @@ class Firewall (object):
     Constructor.
     Put your initialization code here.
     """
-    log.debug("Firewall initialized.")
-    self.allowed_ports = {}
-    self.data_sizes = {}
+    log.debug("Firewall initialized. Begin testing for Part 2.")
+    self.allowed_ports = {}         # [dict] -> ( <destination ip> : <allowed ports> )
+    self.timers = {}                # [dict] -> ( <<destination ip> : <allowed ports>> : <timer>)
 
   def _handle_ConnectionIn (self, event, flow, packet):
     """
@@ -30,42 +30,68 @@ class Firewall (object):
     You can alter what happens with the connection by altering the
     action property of the event.
     """
-    dstport = int(flow.dstport)
-    dstip = flow.dst
+      
+    # [_HANDLE_CONNECTIONIN].INIT: Store the value of Source and Destination ports and ips
+    srcport = flow.srcport
+    dstport = flow.dstport
+    srcip = flow.src
+    dstiP = flow.dst
     log.debug("destination: " + str(dstip) + ", port: " + str(dstport))
-    if dstport == 21: #check if 21 first
-        # event.action.forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
-        # event.action.monitor_forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
-        event.action.monitor_backward = True
-    elif dstport in self.allowed_ports.keys():
-        if len(self.allowed_ports[dstport]) > 2 and dstip != self.allowed_ports[dstport][2]:
-            if dstport > 1023:
-                event.action.deny = True
-            #log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
-            else:
-                event.action.forward = False
-        else:
-            event.action.forward = True
-            # event.action.monitor_forward = True <- COMMENTED OUT, TEST IF UNNECESSARY
-            # event.action.monitor_backward = True <- COMMENTED OUT, TEST IF UNNECESSARY
-            del self.allowed_ports[dstport]
-            #log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
-    # REVISIONS, SEE ORIGINAL CODE BELOW:
-    elif dstport > 1023:
-        log.debug("A connection was blocked " + str(dstip) + " with port number " + str(dtsprt))
-        event.action.deny = True
-    else:
-        event.action.forward = True
-# ORIGINAL CODE
-'''
-    elif dstport <= 1023 and dstport >= 0:
-        event.action.forward = True
-        #log.debug("Allowed connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
-    else:
-        event.action.deny = True
-        #log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
-'''
+    log.debug("source: " + str(srcip) + ", port: " + str(srcport))
     
+    # [_HANDLE.CONNECTIONIN]::CONDITION A: If the value of the port is equal to 21, monitor
+    # data to determine whether not we are dealing with a passive FTP connection.
+    if int(dstport) == 21:
+        if self.buffer.has_key((str(dstip), int(srcport))):
+            del self.buffer[(str(dstip), int(srcport))]
+        log.debug("Monitor data to determine whether we are dealing with a passive FTP connection.")
+        log.debug("Attempting to make a connection between " + str(dstip) + " and Port 21.")
+        event.action.monitor_backward = True
+    
+    # [_HANDLE.CONNECTIONIN]::CONDITION B: Considering that the value of the port is within
+    # the range of 0 and 1023, allow the connection.
+    elif int(dstport) >= 0 and int(flow.dstport) <= 1023:
+        log.debug("Allowed connection [" + str(srcip) + ":" + str(srcport) + "," + str(dstip) + ":" + str(dstport) + "]" )
+        event.action.forward = True
+    
+    # [_HANDLE_CONNECTIONIN]::CONDITION C: Barring the above, consider the following branches...
+    else:
+        # [_HANDLE_CONNECTIONIN]::CONDITION C1: In the event our dictionary for allowed
+        # ports contains the given Destination IP, and the given Destination port is among
+        # the values of said <destination ip : allowed_ports>-pairs...
+        if self.allowed_ports.has_key(str(dstip)):
+            if int(dstport) in self.allowed_ports[str(dstip)]:
+                
+                # [_HANDLE_CONNECTIONIN]::CONDITION C1.1: We will look into whether we have
+                # the given dstip, dstport as a <dstip : dstport> key in timers. If so, look
+                # at whether length of thebvalues are greater than or equal to 0.
+                if self.timers.has_key((str(dstip), int(dstport))):
+                    
+                    # [_HANDLE_CONNECTIONIN]::CONDITION C1.1.1: If the length of the value in
+                    # the kv-pair is equal to 0, delete the pair.
+                    if len(self.timers[(str(dstip), int(dstport))]) == 0:
+                        del self.timers[(str(dstip), int(dstport))]
+    
+                    # [_HANDLE_CONNECTIONIN]::CONDITION C1.1.2: If the length of the value in
+                    # the kv-pair is greater than 0, terminate the execution given
+                    # <dstip : dstport> and delete the pair.
+                    elif len(self.timers[(str(dstip), int(dstport))]) > 0:
+                        self.timers[(str(dstip), int(dstport))][0].cancel()
+                        del self.timers[(str(dstip), int(dstport))] # <- CHECK IF CORRECT
+    
+                # Either way, remove the given destination port from allowed-port values from the
+                # attached to the given dstip key in the allowed_ports dictionary. Allow the
+                # connection to be established with the given port.
+                self.allowed_ports[str(dstip)].remove(int(dstport))
+                log.debug(self.allowed_ports)
+                log.debug("An FTP connection was established with port " + str(dstport))
+                event.action.forward = True
+                    
+        # [_HANDLE_CONNECTIONIN]::CONDITION C2: Otherwise, deny the connection.
+        else:
+            log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+            event.action.deny = True
+
 
   def _handle_DeferredConnectionIn (self, event, flow, packet):
     """
@@ -80,19 +106,37 @@ class Firewall (object):
         log.debug("Allowed FTP connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
         log.debug(str(packet.payload.payload.payload))"""
     pass
-        
+
+    
+    
   def _handle_MonitorData (self, event, packet, reverse):
     """
     Monitoring event handler.
     Called when data passes over the connection if monitoring
     has been enabled by a prior event handler.
+        
+    If we get the values of 227 or 229, we want to parse the packet to get the port.
+        
     """
-    log.debug("NOTICE: We should have been monitoring this packet!")
+    
+    # [_HANDLE_MONITORDATA].INIT: Initialize the following: Data, Source and Destination IP,
+    # Source and Destination ports.
     data = packet.payload.payload.payload
     srcIP = packet.payload.srcip
     dstIP = packet.payload.dstip
     srcPort = packet.payload.payload.srcport
     dstPort = packet.payload.payload.dstport
+    log.debug("data: " + str(data))
+    log.debug("srcIP: " + str(srcIP))
+    log.debug("dstIP: " + str(dstIP))
+    log.debug("srcPort: " + str(srcPort))
+    log.debug("dstPort: " + str(dstPort))
+      
+    # REVISING LATER.
+    return
+                
+      
+    ''' 
     if not reverse:
       ip = str(dstIP)
       extPort = str(dstPort) #made this a string
@@ -158,6 +202,7 @@ class Firewall (object):
                 tcppacket.ack = int(seqNum) + 1460
                 tcppacket.RST=True
                 event.send(tcppacket, reverse=False)
+    '''
                 
                 
   def connectionDone(self, port):
