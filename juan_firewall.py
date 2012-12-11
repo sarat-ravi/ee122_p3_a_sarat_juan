@@ -133,7 +133,7 @@ class Firewall (object):
     log.debug("dstIP: " + str(dstip))
     log.debug("srcPort: " + str(srcport))
     log.debug("dstPort: " + str(dstport))
-    MAX_PORT = 255*256+255
+    # MAX_PORT = 255*256+255
     
     # [_HANDLE_MONITORDATA]::CONDITION A: If the Source port is equal to 21, and if we
     # find a separator \n in the given data,
