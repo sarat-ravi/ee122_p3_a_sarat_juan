@@ -185,13 +185,54 @@ class Firewall (object):
                     str(flow.dst), 
                     int(flow.dstport))
         elif packet:
-            # TODO: parse flow details from packet
-            pass
+            """
+            Available from TCP:
+            -----------------------------------------------
+            self.prev = prev
+            self.srcport  = 0 # 16 bit
+            self.dstport  = 0 # 16 bit
+            self.seq      = 0 # 32 bit
+            self.ack      = 0 # 32 bit
+            self.off      = 0 # 4 bits
+            self.res      = 0 # 4 bits
+            self.flags    = 0 # reserved, 2 bits flags 6 bits
+            self.win      = 0 # 16 bits
+            self.csum     = 0 # 16 bits
+            self.urg      = 0 # 16 bits
+            self.tcplen   = 20 # Options?
+            self.options  = []
+            self.next     = b''
+
+            Available from IP:
+            -----------------------------------------------
+            self.prev = prev
+            self.v     = 4
+            self.hl    = ipv4.MIN_LEN / 4
+            self.tos   = 0
+            self.iplen = ipv4.MIN_LEN
+            ipv4.ip_id = (ipv4.ip_id + 1) & 0xffff
+            self.id    = ipv4.ip_id
+            self.flags = 0
+            self.frag  = 0
+            self.ttl   = 64
+            self.protocol = 0
+            self.csum  = 0
+            self.srcip = IP_ANY
+            self.dstip = IP_ANY
+            self.next  = b''
+            """
+
+            ip_packet = packet.payload
+            tcp_packet = ip_packet.payload
+
+            connection = (str(ip_packet.srcip), 
+                    int(tcp_packet.srcport), 
+                    str(ip_packet.dstip), 
+                    int(tcp_packet.dstport))
 
         if connection == None:
             # This means this function isn't used correctly
-            # raise Exception("Both packet and flow params not found")
-            pass
+            raise Exception("Both packet and flow params not found")
 
         return connection
 
@@ -201,7 +242,7 @@ class Firewall (object):
         You can alter what happens with the connection by altering the
         action property of the event.
         """
-        connection = self.setup_connection(flow=flow, packet=packet) 
+        connection = self.setup_connection(packet=packet) 
         dest_ip = flow.dst
 
         # ban requests for banned domains
