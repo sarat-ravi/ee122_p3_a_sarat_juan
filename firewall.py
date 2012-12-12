@@ -168,8 +168,20 @@ class Firewall (object):
         # if the last packet was 30 seconds ago,
         timedelta = now - last_modified
         log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
+
+        # if idle more than 30 seconds,
         if timedelta >= 30:
+
+            # delete entry
             log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
+            log.debug("-----Connection Data: %s" %(str(connection_data)))
+
+            # Kill the timer
+            connection_data["timer"].cancel()
+
+            return False
+
+        return True
 
     def setup_connection(self, connection, packet):
         """
@@ -186,7 +198,10 @@ class Firewall (object):
         now = time.time()
 
         # create timer 
-        timer = Timer(30, self.delete_idle_connection, args=[connection])
+        try:
+            timer = Timer(30, self.delete_idle_connection, args=[connection], recurring=True)
+        except Exception, e:
+            log.debug("----ERROR-----: %s" %(str(e)))
 
         log.debug("Setting up connection %s at %d" %(str(connection), now))
 
