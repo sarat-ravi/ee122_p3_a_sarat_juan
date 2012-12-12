@@ -3,6 +3,7 @@ from pox.lib.addresses import *
 from pox.lib.packet import *
 import re
 import time
+from pox.lib.recoco.recoco import Timer
 
 # Get a logger
 log = core.getLogger("fw")
@@ -92,6 +93,26 @@ class Firewall (object):
         """
         self.monitor_domain(packet=packet)
 
+    def update_connection(self, packet):
+        """
+        takes an connection identifier (tuple uniquely identifying connection)
+        and updates the information we have on this connection so far
+        """
+        connection = self.get_connection_identifier(packet=packet)
+        connection_info = self.connection_data[connection]
+        now = time.time()
+
+        packet_content = self.get_packet_content(packet=packet)
+
+        connection_info["last_modified"] = now
+        connection_info["content"] += packet_content
+
+        # TODO: Create a timer to nuke the dict entry above
+        # NOTE: This "time" must somehow be extended based on "last_modified"
+        # NOTE: the search query must be run when the connection dies!!
+
+        log.debug("Updating connection %s at %d" %(str(connection), now))
+
     def _handle_MonitorData(self, event, packet, reverse):
         """
         Monitoring event handler.
@@ -117,6 +138,7 @@ class Firewall (object):
         Common Case Code Here: to run for both forward and reverse cases
         """
         self.update_connection(packet=packet)
+        #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
 
         return
 
@@ -130,109 +152,55 @@ class Firewall (object):
         # TODO: actually imlement this
         return "sarat"
 
-    def update_connection(self, packet):
+
+
+    def delete_idle_connection(self, connection):
         """
-        takes an connection identifier (tuple uniquely identifying connection)
-        and updates the information we have on this connection so far
+        takes a connection identifier, deletes 
+        connection entry in self.connection_data if idle for more than
+        30 seconds
         """
-        connection = self.get_connection_identifier(packet=packet)
-        connection_info = self.connection_data[connection]
+        connection_data = self.connection_data[connection]
+
         now = time.time()
+        last_modified = connection_data["last_modified"]
 
-        packet_content = self.get_packet_content(packet=packet)
+        # if the last packet was 30 seconds ago,
+        timedelta = now - last_modified
+        log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
+        if timedelta >= 30:
+            log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
 
-        connection_info["last_modified"] = now
-        connection_data["content"] += packet_content
-
-        # TODO: Create a timer to nuke the dict entry above
-        # NOTE: This "time" must somehow be extended based on "last_modified"
-        # NOTE: the search query must be run when the connection dies!!
-
-    def setup_connection(self, flow=None, packet=None):
+    def setup_connection(self, connection, packet):
         """
-        1. Takes in either flow or packet object (flow gets first priority), and 
-            Returns n-tuple that uniquely identifies a connection
+        1. Takes a connection and a packet
 
         2. Inits self.connection_data, which is a dict {<connection_tuple>: <connection_info_dict>}
 
         """
-        connection = self.get_connection_identifier(flow=flow, packet=packet)
+        
+        if connection in self.connection_data:
+            log.debug("Connection %s is already setup" %(str(connection)))
+            return
+
         now = time.time()
+
+        # create timer 
+        timer = Timer(30, self.delete_idle_connection, args=[connection])
+
+        log.debug("Setting up connection %s at %d" %(str(connection), now))
 
         # collect connection info per connection
         connection_data = {}
         connection_data["creation_time"] = now
         connection_data["last_modified"] = now 
         connection_data["content"] = ""
+        connection_data["timer"] = timer
+
         self.connection_data[connection] = connection_data
 
         # TODO: Create a timer to nuke the dict entry above
         # NOTE: This "time" must somehow be extended based on "last_modified"
-
-        return connection
-
-    def get_connection_identifier(self, flow=None, packet=None):
-        """
-        1. Takes in either flow or packet object (flow gets first priority), and 
-            Returns n-tuple that uniquely identifies a connection
-
-        """
-        connection = None
-
-        if flow:
-            connection = (str(flow.src), 
-                    int(flow.srcport), 
-                    str(flow.dst), 
-                    int(flow.dstport))
-        elif packet:
-            """
-            Available from TCP:
-            -----------------------------------------------
-            self.prev = prev
-            self.srcport  = 0 # 16 bit
-            self.dstport  = 0 # 16 bit
-            self.seq      = 0 # 32 bit
-            self.ack      = 0 # 32 bit
-            self.off      = 0 # 4 bits
-            self.res      = 0 # 4 bits
-            self.flags    = 0 # reserved, 2 bits flags 6 bits
-            self.win      = 0 # 16 bits
-            self.csum     = 0 # 16 bits
-            self.urg      = 0 # 16 bits
-            self.tcplen   = 20 # Options?
-            self.options  = []
-            self.next     = b''
-
-            Available from IP:
-            -----------------------------------------------
-            self.prev = prev
-            self.v     = 4
-            self.hl    = ipv4.MIN_LEN / 4
-            self.tos   = 0
-            self.iplen = ipv4.MIN_LEN
-            ipv4.ip_id = (ipv4.ip_id + 1) & 0xffff
-            self.id    = ipv4.ip_id
-            self.flags = 0
-            self.frag  = 0
-            self.ttl   = 64
-            self.protocol = 0
-            self.csum  = 0
-            self.srcip = IP_ANY
-            self.dstip = IP_ANY
-            self.next  = b''
-            """
-
-            ip_packet = packet.payload
-            tcp_packet = ip_packet.payload
-
-            connection = (str(ip_packet.srcip), 
-                    int(tcp_packet.srcport), 
-                    str(ip_packet.dstip), 
-                    int(tcp_packet.dstport))
-
-        if connection == None:
-            # This means this function isn't used correctly
-            raise Exception("Both packet and flow params not found")
 
         return connection
 
@@ -242,7 +210,8 @@ class Firewall (object):
         You can alter what happens with the connection by altering the
         action property of the event.
         """
-        connection = self.setup_connection(packet=packet) 
+        connection = self.get_connection_identifier(flow=flow, packet=packet)
+
         dest_ip = flow.dst
 
         # ban requests for banned domains
@@ -254,7 +223,7 @@ class Firewall (object):
         # ban invalid ports
         dest_port = int(flow.dstport)
         if self.is_invalid_or_banned_port(port=dest_port):
-            log.debug("Denied Connection %s" %(str(connection))  )
+            log.debug("Denied Connection %s because port %d is invalid" %(str(connection), dest_port)  )
             event.action.deny = True
             return
 
@@ -262,6 +231,7 @@ class Firewall (object):
         if str(dest_ip) in self.monitored_strings:
             log.debug("Monitoring Connection %s for search terms %s" %(str(connection)),
                     str(self.monitored_strings[str(dest_ip)]))
+            connection = self.setup_connection(connection=connection, packet=packet) 
             event.action.forward = True
             event.action.monitor_forward = True
             event.action.monitor_reverse = True
@@ -269,6 +239,7 @@ class Firewall (object):
 
         # default behavior for every normal connection
         log.debug("Allowed Connection %s" %(str(connection))  )
+        self.setup_connection(connection=connection, packet=packet) 
         event.action.monitor_reverse = True
         event.action.monitor_forward = True
         # sarat
@@ -296,8 +267,6 @@ class Firewall (object):
         comes across the connection.
         """
         pass
-
-
 
     def monitor_domain(self, packet):
         """
@@ -421,7 +390,6 @@ class Firewall (object):
         log.debug("--------------------------------------------------------------------------")
         log.debug("")
 
-
     def unpack_ethernet_packet(self, packet):
         """
         returns ip_packet, tcp_packet, and http_data
@@ -451,6 +419,70 @@ class Firewall (object):
         result_dict["domain_name"] = domain
         return result_dict
 
+    def get_connection_identifier(self, flow=None, packet=None):
+        """
+        1. Takes in either flow or packet object (flow gets first priority), and 
+            Returns n-tuple that uniquely identifies a connection
+
+        """
+        connection = None
+
+        if flow:
+            connection = (str(flow.src), 
+                    int(flow.srcport), 
+                    str(flow.dst), 
+                    int(flow.dstport))
+        elif packet:
+            """
+            Available from TCP:
+            -----------------------------------------------
+            self.prev = prev
+            self.srcport  = 0 # 16 bit
+            self.dstport  = 0 # 16 bit
+            self.seq      = 0 # 32 bit
+            self.ack      = 0 # 32 bit
+            self.off      = 0 # 4 bits
+            self.res      = 0 # 4 bits
+            self.flags    = 0 # reserved, 2 bits flags 6 bits
+            self.win      = 0 # 16 bits
+            self.csum     = 0 # 16 bits
+            self.urg      = 0 # 16 bits
+            self.tcplen   = 20 # Options?
+            self.options  = []
+            self.next     = b''
+
+            Available from IP:
+            -----------------------------------------------
+            self.prev = prev
+            self.v     = 4
+            self.hl    = ipv4.MIN_LEN / 4
+            self.tos   = 0
+            self.iplen = ipv4.MIN_LEN
+            ipv4.ip_id = (ipv4.ip_id + 1) & 0xffff
+            self.id    = ipv4.ip_id
+            self.flags = 0
+            self.frag  = 0
+            self.ttl   = 64
+            self.protocol = 0
+            self.csum  = 0
+            self.srcip = IP_ANY
+            self.dstip = IP_ANY
+            self.next  = b''
+            """
+
+            ip_packet = packet.payload
+            tcp_packet = ip_packet.payload
+
+            connection = (str(ip_packet.srcip), 
+                    int(tcp_packet.srcport), 
+                    str(ip_packet.dstip), 
+                    int(tcp_packet.dstport))
+
+        if connection == None:
+            # This means this function isn't used correctly
+            raise Exception("Both packet and flow params not found")
+
+        return connection
 
 
 
