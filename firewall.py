@@ -1,508 +1,295 @@
 from pox.core import core
-from pox.lib.addresses import *
+from pox.lib.addresses import * 
 from pox.lib.packet import *
-import re
-import time
 from pox.lib.recoco.recoco import Timer
+import re
 
 # Get a logger
 log = core.getLogger("fw")
 
 class Firewall (object):
+  """
+  Firewall class.
+  Extend this to implement some firewall functionality.
+  Don't change the name or anything -- the eecore component
+  expects it to be firewall.Firewall.
+  """
+  
+  def __init__(self):
     """
-    Firewall class.
-    Extend this to implement some firewall functionality.
-    Don't change the name or anything -- the eecore component
-    expects it to be firewall.Firewall.
+    Constructor.
+    Put your initialization code here.
     """
-    def __init__(self):
-        """
-        Constructor.
-        """
-        log.debug("Firewall initialized. Hello")
+    log.debug("Firewall initialized. Begin testing for Part 2.")
+    self.allowed_ports = {}         # [dict] -> ( <destination ip> : <allowed ports> )
+    self.buffer = {}                # [dict] -> ( <source ip> : <buffered ports> )
+    self.timers = {}                # [dict] -> ( <<destination ip> : <allowed ports>> : <timer>)
 
-        # list [123, 456, 789]
-        self.banned_ports = self.get_banned_port_numbers()
-
-        # list ["google", "amazon", "bing"]
-        self.banned_domains_raw = self.get_banned_domains()
-        self.banned_domains = [item.split(".")[-2] for item in self.banned_domains_raw]
-
-        # dict {<ip>: [<search_string>, <search_string2>, ...]}
-        self.monitored_strings = self.get_monitored_strings()
-
-        # dict {<ip>: True}
-        self.banned_ips = {}
-
-        # dict {<connection_tuple>: <connection_info_dict>}
-        self.connection_data = {}
-
-        self.var_log("Banned Ports", self.banned_ports)
-        self.var_log("Banned Domains", self.banned_domains)
-        #self.var_log("Monitored Strings", self.monitored_strings)
-
-
-    def get_search_counts_for_strings(self, search_strings, body):
-        """
-        returns search counts mapping the list <search_strings>
-        in the body
-
-        sample usage:
-            counts = self.get_search_counts_for_strings(search_strings=["abc", "abcdef"], 
-                    body="abcdefabcabcdefabcabcqweabc")
-
-            counts >>> [6,2]
-        """
-        counts = [body.count(search_string) for search_string in search_strings]
-        return counts
-
-    def write_search_counts_to_file(self, ip, port, search_strings, counts):
-        """
-        gets ip and a list of counts corresponding to the list of 
-        search_strings and appends to counts.txt file
-
-        sample usage:
-            self.write_search_counts_to_file(ip="1.2.3.4",
-                    port=123,
-                    search_strings=["sarat", "juan", "testing"],
-                    counts=[4,5,6])
-        """
-
-        f = open("/root/pox/ext/counts.txt", "a")
-        for search_string, count in zip(search_strings, counts):
-            write_string = "%s,%s,%s,%s\n" %(str(ip),
-                    str(port),
-                    str(search_string),
-                    str(count))
-            f.write(write_string)
-
-        f.flush()
-        f.close()
-
-    def monitor_request(self, packet):
-        """
-        decides what to do with the connection
-        based on this packet's domain_name details
-        """
-        self.monitor_domain(packet=packet)
-
-    def monitor_response(self, packet):
-        """
-        decides what to do with the connection
-        based on this packet's domain_name details
-        """
-        self.monitor_domain(packet=packet)
-
-    def update_connection(self, packet):
-        """
-        takes an connection identifier (tuple uniquely identifying connection)
-        and updates the information we have on this connection so far
-        """
-        connection = self.get_connection_identifier(packet=packet)
-        connection_info = self.connection_data[connection]
-        now = time.time()
-
-        packet_content = self.get_packet_content(packet=packet)
-
-        connection_info["last_modified"] = now
-        connection_info["content"] += packet_content
-
-        # TODO: Create a timer to nuke the dict entry above
-        # NOTE: This "time" must somehow be extended based on "last_modified"
-        # NOTE: the search query must be run when the connection dies!!
-
-        log.debug("Updating connection %s at %d" %(str(connection), now))
-
-    def _handle_MonitorData(self, event, packet, reverse):
-        """
-        Monitoring event handler.
-        Called when data passes over the connection if monitoring
-        has been enabled by a prior event handler.
-        """
-        if reverse:
-            """
-            Monitor Incoming Packets
-            """
-            #log.debug("Monitoring Reverse")
-            # IP bans invalid domain name responses
-            self.monitor_response(packet=packet)
+  def _handle_ConnectionIn (self, event, flow, packet):
+    """
+    New connection event handler.
+    You can alter what happens with the connection by altering the
+    action property of the event.
+    """
+      
+    # [_HANDLE_CONNECTIONIN].INIT: Store the value of Source and Destination ports and ips
+    srcport = flow.srcport
+    dstport = flow.dstport
+    srcip = flow.src
+    dstiP = flow.dst
+    log.debug("destination: " + str(dstip) + ", port: " + str(dstport))
+    log.debug("source: " + str(srcip) + ", port: " + str(srcport))
+    
+    # [_HANDLE.CONNECTIONIN]::CONDITION A: If the value of the port is equal to 21, monitor
+    # data to determine whether not we are dealing with a passive FTP connection.
+    if int(dstport) == 21:
+        if self.buffer.has_key((str(dstip), int(srcport))):
+            del self.buffer[(str(dstip), int(srcport))]
+        log.debug("Monitor data to determine whether we are dealing with a passive FTP connection.")
+        log.debug("Attempting to make a connection between " + str(dstip) + " and Port 21.")
+        event.action.monitor_backward = True
+    
+    # [_HANDLE.CONNECTIONIN]::CONDITION B: Considering that the value of the port is within
+    # the range of 0 and 1023, allow the connection.
+    elif int(dstport) >= 0 and int(flow.dstport) <= 1023:
+        log.debug("Allowed connection [" + str(srcip) + ":" + str(srcport) + "," + str(dstip) + ":" + str(dstport) + "]" )
+        event.action.forward = True
+    
+    # [_HANDLE_CONNECTIONIN]::CONDITION C: Barring the above, consider the following branches...
+    else:
+        # [_HANDLE_CONNECTIONIN]::CONDITION C1: In the event our dictionary for allowed
+        # ports contains the given Destination IP, and the given Destination port is among
+        # the values of said <destination ip : allowed_ports>-pairs...
+        if self.allowed_ports.has_key(str(dstip)):
+            if int(dstport) in self.allowed_ports[str(dstip)]:
+                
+                # [_HANDLE_CONNECTIONIN]::CONDITION C1.1: We will look into whether we have
+                # the given dstip, dstport as a <dstip : dstport> key in timers. If so, look
+                # at what length of the values are.
+                if self.timers.has_key((str(dstip), int(dstport))):
+                    
+                    # [_HANDLE_CONNECTIONIN]::CONDITION C1.1.1: If the length of the value in
+                    # the kv-pair is equal to 0, delete the pair.
+                    if len(self.timers[(str(dstip), int(dstport))]) == 0:
+                        del self.timers[(str(dstip), int(dstport))]
+    
+                    # [_HANDLE_CONNECTIONIN]::CONDITION C1.1.2: If the length of the value in
+                    # the kv-pair is greater than 0, terminate the execution given
+                    # <dstip : dstport> and delete the pair.
+                    else:
+                        self.timers[(str(dstip), int(dstport))][0].cancel()
+                        self.timers[(str(dstip), int(dstport))].pop(0) # <- CHECK IF CORRECT
+    
+                # Either way, remove the given destination port from allowed-port values from the
+                # attached to the given dstip key in the allowed_ports dictionary. Allow the
+                # connection to be established with the given port.
+                self.allowed_ports[str(dstip)].remove(int(dstport))
+                log.debug(self.allowed_ports)
+                log.debug("An FTP connection was established with port " + str(dstport))
+                event.action.forward = True
+                    
+        # [_HANDLE_CONNECTIONIN]::CONDITION C2: Otherwise, deny the connection.
         else:
-            """
-            Monitor Outgoing Packets
-            """
-            #log.debug("Monitoring Forward")
-            # IP bans invalid domain name requests
-            self.monitor_request(packet=packet)
-
-        """
-        Common Case Code Here: to run for both forward and reverse cases
-        """
-        self.update_connection(packet=packet)
-        #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
-
-        return
-
-    def get_packet_content(self, packet):
-        """
-        takes in a packet and returns the body of the packet, or
-        the http content. This represents the "body" to be searched
-        by the search strings
-        """
-
-        # TODO: actually imlement this
-        return "sarat"
+            log.debug("Denied connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+            event.action.deny = True
 
 
+  def _handle_DeferredConnectionIn (self, event, flow, packet):
+    """
+    Deferred connection event handler.
+    If the initial connection handler defers its decision, this
+    handler will be called when the first actual payload data
+    comes across the connection.
+    """
+    """dstport = int(flow.dstport)
+    if dstport == 21:
+        event.action.forward = True
+        log.debug("Allowed FTP connection [" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]" )
+        log.debug(str(packet.payload.payload.payload))"""
+    pass
 
-    def delete_idle_connection(self, connection):
-        """
-        takes a connection identifier, deletes 
-        connection entry in self.connection_data if idle for more than
-        30 seconds
-        """
-        connection_data = self.connection_data[connection]
-
-        now = time.time()
-        last_modified = connection_data["last_modified"]
-
-        # if the last packet was 30 seconds ago,
-        timedelta = now - last_modified
-        log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
-
-        # if idle more than 30 seconds,
-        if timedelta >= 30:
-
-            # delete entry
-            log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
-            log.debug("-----Connection Data: %s" %(str(connection_data)))
-
-            # Kill the timer
-            connection_data["timer"].cancel()
-
-            return False
-
-        return True
-
-    def setup_connection(self, connection, packet):
-        """
-        1. Takes a connection and a packet
-
-        2. Inits self.connection_data, which is a dict {<connection_tuple>: <connection_info_dict>}
-
-        """
+    
+  def _handle_MonitorData (self, event, packet, reverse):
+    """
+    Monitoring event handler.
+    Called when data passes over the connection if monitoring
+    has been enabled by a prior event handler.
         
-        if connection in self.connection_data:
-            log.debug("Connection %s is already setup" %(str(connection)))
-            return
-
-        now = time.time()
-
-        # create timer 
-        try:
-            timer = Timer(30, self.delete_idle_connection, args=[connection], recurring=True)
-        except Exception, e:
-            log.debug("----ERROR-----: %s" %(str(e)))
-
-        log.debug("Setting up connection %s at %d" %(str(connection), now))
-
-        # collect connection info per connection
-        connection_data = {}
-        connection_data["creation_time"] = now
-        connection_data["last_modified"] = now 
-        connection_data["content"] = ""
-        connection_data["timer"] = timer
-
-        self.connection_data[connection] = connection_data
-
-        # TODO: Create a timer to nuke the dict entry above
-        # NOTE: This "time" must somehow be extended based on "last_modified"
-
-        return connection
-
-    def _handle_ConnectionIn (self, event, flow, packet):
-        """
-        New connection event handler.
-        You can alter what happens with the connection by altering the
-        action property of the event.
-        """
-        connection = self.get_connection_identifier(flow=flow, packet=packet)
-
-        dest_ip = flow.dst
-
-        # ban requests for banned domains
-        if str(dest_ip) in self.banned_ips:
-            log.debug("Denied IP %s" %(str(dest_ip)))
-            event.action.deny = True
-            return
-
-        # ban invalid ports
-        dest_port = int(flow.dstport)
-        if self.is_invalid_or_banned_port(port=dest_port):
-            log.debug("Denied Connection %s because port %d is invalid" %(str(connection), dest_port)  )
-            event.action.deny = True
-            return
-
-        # if dest_ip is to be monitored for search strings
-        if str(dest_ip) in self.monitored_strings:
-            log.debug("Monitoring Connection %s for search terms %s" %(str(connection)),
-                    str(self.monitored_strings[str(dest_ip)]))
-            connection = self.setup_connection(connection=connection, packet=packet) 
-            event.action.forward = True
-            event.action.monitor_forward = True
-            event.action.monitor_reverse = True
-            return
-
-        # default behavior for every normal connection
-        log.debug("Allowed Connection %s" %(str(connection))  )
-        self.setup_connection(connection=connection, packet=packet) 
-        event.action.monitor_reverse = True
-        event.action.monitor_forward = True
-        # sarat
-
-    def is_invalid_or_banned_port(self, port):
-        """
-        Intelligently determines if port is banned or not
-        returns True if port is banned
-        """
-        # obvious invalid case
-        if port < 0 or port > 1023:
-            return True
-
-        # if port is banned according to banned-ports.txt
-        if port in self.banned_ports:
-            return True
-
-        return False
-
-    def _handle_DeferredConnectionIn (self, event, flow, packet):
-        """
-        Deferred connection event handler.
-        If the initial connection handler defers its decision, this
-        handler will be called when the first actual payload data
-        comes across the connection.
-        """
-        pass
-
-    def monitor_domain(self, packet):
-        """
-        adds domain to naughty list when appropriate
-        """
-        # bans this ip as it maps to a banned domain
-        domain_name = self.get_domain_name_from_packet(packet=packet)
-        if self.is_banned_domain(domain=domain_name):
-            ip = packet.payload.dstip
-            self.banned_ips[str(ip)] = True
-            log.debug("Denied Connection to %s" %(str(ip)))
-
-    def is_banned_domain(self, domain):
-        """
-        figures out if domain name is banned
-        """
-        if not domain:
-            return False
-
-        banned = domain in self.banned_domains
-        return banned
-
-    def get_domain_name_from_packet(self, packet):
-        """
-        gets domain name from http data, returns None if unparsable
-        """
-        # get domain name
-        http_info = self.get_http_info(packet=packet)
-        domain_name = http_info["domain_name"]
-        hostname = None 
-
-        # Log every nontrivial domain requested
-        if not domain_name == '':
-            hostname = domain_name.split(".")[-2]
-            self.var_log("Domain Name", hostname)
-
-        return hostname
-
-    def get_monitored_strings(self):
-        """
-        reads monitored-strings.txt and returns a dict
-        {<ip_addr>: [<string1>, <string2>, ...]}
-        """
-
-        f = open("/root/pox/ext/monitored-strings.txt", "r")
-        lines = f.readlines() 
-        f.flush()
-        f.close()
-
-        monitored_strings = {}
-
-        for line in lines:
-            line = line.strip()
-
-            ip, search_string = line.split(":")
-
-            # init if not already
-            if not ip in monitored_strings:
-                monitored_strings[ip] = []
-
-            # append to list
-            monitored_strings[ip].append(search_string) 
-
-        return monitored_strings
-
-    def get_banned_port_numbers(self):
-        """
-        parses file and returns a list of banned ports
-        """
-        filename = "/root/pox/ext/banned-ports.txt"
-        f = open(filename, 'r')
-        lines = f.readlines()
-
-        f.flush()
-        f.close()
-
-        ports = [int(line) for line in lines]
-        return ports
-
-    def get_banned_domains(self):
-        """
-        parses file and returns list of banned domains
-        """
-        filename = "/root/pox/ext/banned-domains.txt"
-        f = open(filename, 'r')
-        domains = f.readlines()
-
-        f.flush()
-        f.close()
-
-        domains = [str(domain.strip()) for domain in domains] 
-        return domains
-
-    def var_log(self, name, message, caller="ConnectionIn"):
-        string = "(%s) \t %s = %s" %(str(caller),
-                str(name),
-                str(message))
-
-        log.debug(str(string))
-
-    def log_connection_data(self, event, flow, packet, caller="ConnectionIn Default"):
-
-        # get basic connection data
-        log.debug("")
-        log.debug("--------------------------------------------------------------------------")
-
-
-        connection = "[" + str(flow.src) + ":" + str(flow.srcport) + "," + str(flow.dst) + ":" + str(flow.dstport) + "]"
-        ip_packet = packet.payload
-        tcp_packet = ip_packet.payload
-        tcp_payload = tcp_packet.payload
-
-        self.var_log(name="Connection", 
-                message=connection, 
-                caller=caller)
-
-        self.var_log(name="TCP_Payload", 
-                message=tcp_payload, 
-                caller=caller)
-
-        log.debug("--------------------------------------------------------------------------")
-        log.debug("")
-
-    def unpack_ethernet_packet(self, packet):
-        """
-        returns ip_packet, tcp_packet, and http_data
-        in that order
-        """
-        # gets http_data from packet
-        ip_packet = packet.payload
-        tcp_packet = ip_packet.payload
-        http_data = tcp_packet.payload
-
-        return ip_packet, tcp_packet, http_data
-
-    def get_http_info(self, packet):
-        """
-        Parses http_data and returns useful info,
-        like domain name for instance
-        """
-        ip_packet, tcp_packet, http_data = self.unpack_ethernet_packet(packet=packet)
-
-        # get domain name from http header
-        domain = ""
-        m = re.search("(?<=Host: ).*", http_data)
-        if m: domain = m.group(0).strip()
-
-        # return misc http info
-        result_dict = {}
-        result_dict["domain_name"] = domain
-        return result_dict
-
-    def get_connection_identifier(self, flow=None, packet=None):
-        """
-        1. Takes in either flow or packet object (flow gets first priority), and 
-            Returns n-tuple that uniquely identifies a connection
-
-        """
-        connection = None
-
-        if flow:
-            connection = (str(flow.src), 
-                    int(flow.srcport), 
-                    str(flow.dst), 
-                    int(flow.dstport))
-        elif packet:
-            """
-            Available from TCP:
-            -----------------------------------------------
-            self.prev = prev
-            self.srcport  = 0 # 16 bit
-            self.dstport  = 0 # 16 bit
-            self.seq      = 0 # 32 bit
-            self.ack      = 0 # 32 bit
-            self.off      = 0 # 4 bits
-            self.res      = 0 # 4 bits
-            self.flags    = 0 # reserved, 2 bits flags 6 bits
-            self.win      = 0 # 16 bits
-            self.csum     = 0 # 16 bits
-            self.urg      = 0 # 16 bits
-            self.tcplen   = 20 # Options?
-            self.options  = []
-            self.next     = b''
-
-            Available from IP:
-            -----------------------------------------------
-            self.prev = prev
-            self.v     = 4
-            self.hl    = ipv4.MIN_LEN / 4
-            self.tos   = 0
-            self.iplen = ipv4.MIN_LEN
-            ipv4.ip_id = (ipv4.ip_id + 1) & 0xffff
-            self.id    = ipv4.ip_id
-            self.flags = 0
-            self.frag  = 0
-            self.ttl   = 64
-            self.protocol = 0
-            self.csum  = 0
-            self.srcip = IP_ANY
-            self.dstip = IP_ANY
-            self.next  = b''
-            """
-
-            ip_packet = packet.payload
-            tcp_packet = ip_packet.payload
-
-            connection = (str(ip_packet.srcip), 
-                    int(tcp_packet.srcport), 
-                    str(ip_packet.dstip), 
-                    int(tcp_packet.dstport))
-
-        if connection == None:
-            # This means this function isn't used correctly
-            raise Exception("Both packet and flow params not found")
-
-        return connection
-
-
-
-
-
-
-
-
+    If we get the values of 227 or 229, we want to parse the packet to get the port.
+    Once we get a specific port number, add it to the allowed_ports
+    Start a time for 10 seconds that deletes that port number from self.allowed_ports
+        
+    """
+    
+    # [_HANDLE_MONITORDATA].INIT: Initialize the following: Data, Source and Destination IP,
+    # Source and Destination ports.
+    data = packet.payload.payload.payload
+    srcip = packet.payload.srcip
+    dstip = packet.payload.dstip
+    srcport = packet.payload.payload.srcport
+    dstport = packet.payload.payload.dstport
+    log.debug("data: " + str(data))
+    log.debug("srcIP: " + str(srcip))
+    log.debug("dstIP: " + str(dstip))
+    log.debug("srcPort: " + str(srcport))
+    log.debug("dstPort: " + str(dstport))
+    # MAX_PORT = 255*256+255
+    
+    # [_HANDLE_MONITORDATA]::CONDITION A: If the Source port is equal to 21, and if we
+    # find a separator \n in the given data,
+    if srcport == 21:
+        # [_HANDLE_MONITORDATA]
+        if "\n" in data:
+            if self.buffer.has_key((srcip, dstport)):
+                data = self.buffer[(srcip), dstport)] + data
+            data_split = data.split("\n")
+            tmp = data_split[-1]
+            self.buffer[(srcip, dstport)] = tmp
+            count = 0
+            # [_HANDLE_MONITORDATA]:: LOOP A: 
+            while (count < (len(data_split) - 1)):
+                tmp = data_split[count]
+                if len(tmp) > 8:
+                    # [_HANDLE_MONITORDATA]:: CONDITION A1
+                    if "229" in tmp[:3]:
+                        log.debug("We have gotten the value of 229. We must parse " + data + ".")
+                        values = (re.compile('\d+')).findall(tmp)
+                        port_value = int(values[len(values)-1])
+                        if self.allowed_ports.has_key(srcip):
+                            self.allowed_ports[srcip].append(port_values)
+                        else:
+                            self.allowed_ports[srcip] = []
+                            self.allowed_ports[srcip].append(port_values)
+                        if self.timers.has_key((srcip, port_value)):
+                            self.timers[(srcip, port_value)].append(Timer(10, self.remove_address_port, args = (srcip, port_value)))
+                        else:
+                            self.timers[(srcip, port_value)] = []
+                            self.timers[(srcip, port_value)].append(Timer(10, self.remove_address_port, args = (srcip, port_value)))
+                        log.debug(self.allowed_ports)
+                        log.debug("Operation concerning value 229 done.")
+                    # [_HANDLE_MONITORDATA]:: CONDITION A2
+                    if "227" in tmp[:3]:
+                        log.debug("We have gotten the value of 227. We must parse " + data ".")
+                        port = re.compile('/d+')
+                        port_value = int(port.findall(tmp)[-2]))*256+int(port.findall(tmp)[-1])
+                        if self.allowed_ports.has_key(srcip):
+                            self.allowed_ports[srcip].append(port_value)
+                        else:
+                            self.allowed_ports[srcip] = []
+                            self.allowed_ports[srcip].append(port_value)
+                        if self.timers.has_key((srcip, port_value)):
+                            self.timers[(srcip, port_value)].append(Timer(10, self._remove_address_port, args = (srcip, port_value)))
+                        else:
+                            self.timers[(srcip, port_value)] = []
+                            self.timers[(srcip, port_value)].append(Timer(10, self._remove_address_port, args = (srcip, port_value)))
+                        log.debug(self.allowed_ports)
+                        log.debug("Operation concerning value 227 done.")
+                    i += 1
+        else:
+            if self.buffer.has_key((srcip, dstport)):
+                tmp = self.buffer[(srcip, dstport)]
+                tmp = tmp + data
+                self.buffer[(srcip, dstport)] = tmp
+            else:
+                self.buffer[(srcip, dstport)] = data
+        event.action.forward = True
+
+  def _remove_address_port(self, dstip, port):
+    if self.timers.has_key((dstip, port)):
+        if len(self.timers[(dstip, port)]) == 0:
+            del self.timers[(dstip, port)]
+        else:
+            self.timers[(dstip, port)].pop(0)
+    if self.allowed_ports.has_key(dstip):
+        if port in self.allowed_ports[dstip]:
+            self.allowed_ports[dstip].remove(port)
+    log.debug("remove address port. Please check: " + self.allowed_ports)
+
+
+
+# ORIGINAL CODE, SEE BELOW
+'''
+    # REVISING LATER.
+    return
+    '''
+
+'''
+    if not reverse:
+    ip = str(dstIP)
+    extPort = str(dstPort) #made this a string
+    otherPort = str(srcPort)
+    out = True
+    else:
+    ip = str(srcIP)
+    extPort = str(srcPort) #and this
+    otherPort = str(dstPort)
+    out = False
+    #log.debug(str(packet.payload.payload))
+    if int(extPort) == 21:
+    m = re.search("227 Entered Passive Mode .*", str(data))
+    if m:
+    newlineraw = m.group(0)
+    newline = newlineraw.replace("227 Entered Passive Mode (", "")
+    newline = newline.replace(")", "")
+    #log.debug(newline)
+    newportraw = newline.rsplit(',')
+    newport = self.getPortNumber(int(newportraw[4]), int(newportraw[5]))
+    
+    assigned_ip = newportraw[0] + "." + newportraw[1] + "." + newportraw[2] + "." + newportraw[3]
+    
+    self.allowed_ports[newport] = [Timer(10, self.connectionDone, args = (newport)), assigned_ip]
+    self.data_sizes[newport] = -1
+    #log.debug("NEW ASSIGNED IP: ")
+    #log.debug(assigned_ip)
+    l = re.search("229 Entering extended passive mode.*", str(data))
+    
+    if l:
+    newlineraw = l.group(0)
+    newline = newlineraw.replace("229 Entering extended passive mode (|||", "")
+    newline = newline.replace("|).", "")
+    
+    newport = int(newline)
+    
+    self.allowed_ports[newport] = [Timer(10, self.connectionDone, args = (newport))]
+    self.data_sizes[newport] = -1
+    else:
+    #parse TCP here
+    #fromPort, toPort, seqNum
+    junk = str(packet.payload.payload)
+    junk = junk.replace("{","")
+    junks = junk.rsplit(">")
+    fromPort = junks[0]
+    junk = junks[1]
+    junks = junk.rsplit("} seq:")
+    toPort = junks[0]
+    junk = junks[1]
+    junks = junk.rsplit(" ack:")
+    seqNum = junks[0]
+    junk = junks[1]
+    junks = junk.rsplit(" f:")
+    ackNum = junks[0]
+    if int(fromPort) == int(extPort):
+    if self.data_sizes[int(extPort)] == -1:
+    self.data_sizes[int(extPort)] = int(seqNum)
+    elif self.data_sizes[int(extPort)] + 1000000 < int(seqNum):
+    tcppacket = packet.payload.payload
+    tcppacket.srcport = dstPort
+    tcppacket.dstport = srcPort
+    tcppacket.seq = int(ackNum)
+    tcppacket.ack = int(seqNum) + 1460
+    tcppacket.RST=True
+    event.send(tcppacket, reverse=False)
+    '''
+
+
+'''
+  def connectionDone(self, port):
+      del self.allowed_ports[port]
+    
+  def getPortNumber(self, num1, num2):
+      hex1 = hex(num1)
+      hex2_raw = hex(num2)
+      hex2 = hex2_raw[2:]
+      hex_total = hex1 + hex2
+      return int(hex_total, 16)
+'''
