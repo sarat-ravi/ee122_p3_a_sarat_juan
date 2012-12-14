@@ -43,6 +43,81 @@ class Firewall (object):
         self.var_log("Banned Domains", self.banned_domains)
         #self.var_log("Monitored Strings", self.monitored_strings)
 
+    def delete_idle_connection(self, connection):
+        """
+        takes a connection identifier, deletes 
+        connection entry in self.connection_data if idle for more than
+        30 seconds
+        """
+        try:
+            connection_data = self.connection_data[connection]
+
+            now = time.time()
+            last_modified = connection_data["last_modified"]
+
+            # if the last packet was 30 seconds ago,
+            timedelta = now - last_modified
+            log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
+
+            # print domain name for debugging purposes
+            srcip, srcport, destip, destport = connection
+            domain = ""
+            if str(destip) in self.ip_to_domain:
+                domain = self.ip_to_domain[str(destip)]
+
+            # if idle more than 30 seconds,
+            if timedelta >= 27:
+
+                # delete entry
+                log.debug("----------------------------------------------------------------------------------------------")
+                log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
+                log.debug("-----Connection Data: (%s) %s" %(str(domain), str(connection_data)))
+                log.debug("----------------------------------------------------------------------------------------------")
+
+                #f = open("/root/pox/ext/sarat.txt", "w")
+                #import json
+                #data = {"request": connection_data["content"],
+                        #"response": connection_data["reverse_content"]}
+                #js = json.dumps(data)
+                #f.write(js)
+                #f.close()
+
+                self.get_and_write_search_counts_for_connection(connection=connection)
+
+                # Kill the timer
+                connection_data["timer"].cancel()
+
+                return False
+        except Exception, e:
+            log.debug("ERROR!!!!!!!!!!!!! (delete idle conn): %s" %(str(e)))
+
+        return True
+
+    def get_and_write_search_counts_for_connection(self, connection):
+        """
+        performs search on connection data and write to file
+        """
+        if not connection in self.connection_data:
+            log.debug("!!!!!!!!! (get and write search counts): connection data for %s doesn't exist!!" %(str(connection)))
+            return
+
+        srcip, srcport, destip, destport = connection
+
+        if not str(destip) in self.monitored_strings:
+            log.debug("!!!!!!!! (get and write search counts): connection %s was never monitored!!" %(str(connection)))
+            return
+
+        # get required params for search
+        connection_data = self.connection_data[connection]
+        body = connection_data["content"] + connection_data["reverse_content"]
+        search_strings = self.monitored_strings[str(destip)]
+
+        # writing counts to file
+        counts = self.get_search_counts_for_strings(search_strings=search_strings, body=body)
+        self.write_search_counts_to_file(ip=destip, port=destport, search_strings=search_strings, counts=counts)
+
+        log.debug("Found counts %s for search strings %s for connection %s" %(str(counts), str(search_strings), str(connection)))
+
 
     def get_search_counts_for_strings(self, search_strings, body):
         """
@@ -168,53 +243,6 @@ class Firewall (object):
         http_data = packet.payload.payload.payload
         return http_data
 
-    def delete_idle_connection(self, connection):
-        """
-        takes a connection identifier, deletes 
-        connection entry in self.connection_data if idle for more than
-        30 seconds
-        """
-        try:
-            connection_data = self.connection_data[connection]
-
-            now = time.time()
-            last_modified = connection_data["last_modified"]
-
-            # if the last packet was 30 seconds ago,
-            timedelta = now - last_modified
-            log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
-
-            # print domain name for debugging purposes
-            srcip, srcport, destip, destport = connection
-            domain = ""
-            if str(destip) in self.ip_to_domain:
-                domain = self.ip_to_domain[str(destip)]
-
-            # if idle more than 30 seconds,
-            if timedelta >= 27:
-
-                # delete entry
-                log.debug("----------------------------------------------------------------------------------------------")
-                log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
-                log.debug("-----Connection Data: (%s) %s" %(str(domain), str(connection_data)))
-                log.debug("----------------------------------------------------------------------------------------------")
-
-                #f = open("/root/pox/ext/sarat.txt", "w")
-                #import json
-                #data = {"request": connection_data["content"],
-                        #"response": connection_data["reverse_content"]}
-                #js = json.dumps(data)
-                #f.write(js)
-                #f.close()
-
-                # Kill the timer
-                connection_data["timer"].cancel()
-
-                return False
-        except Exception, e:
-            log.debug("ERROR!!!!!!!!!!!!! (delete idle conn): %s" %(str(e)))
-
-        return True
 
     def setup_connection(self, connection, packet):
         """
