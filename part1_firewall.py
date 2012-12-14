@@ -74,14 +74,6 @@ class Firewall (object):
                 log.debug("-----Connection Data: (%s) %s" %(str(domain), str(connection_data)))
                 log.debug("----------------------------------------------------------------------------------------------")
 
-                #f = open("/root/pox/ext/sarat.txt", "w")
-                #import json
-                #data = {"request": connection_data["content"],
-                        #"response": connection_data["reverse_content"]}
-                #js = json.dumps(data)
-                #f.write(js)
-                #f.close()
-
                 self.get_and_write_search_counts_for_connection(connection=connection)
 
                 # Kill the timer
