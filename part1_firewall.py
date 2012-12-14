@@ -79,6 +79,9 @@ class Firewall (object):
                 # Kill the timer
                 connection_data["timer"].cancel()
 
+                # delete the record from the dict
+                del self.connection_data[connection]
+
                 return False
         except Exception, e:
             log.debug("ERROR!!!!!!!!!!!!! (delete idle conn): %s" %(str(e)))
