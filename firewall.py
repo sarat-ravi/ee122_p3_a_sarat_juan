@@ -269,7 +269,6 @@ class Firewall (object):
                 event.action.deny = True
                 return
 
-
             # default behavior for every normal connection
             #log.debug("Allowed Connection %s" %(str(connection))  )
             event.action.defer = True
@@ -286,12 +285,14 @@ class Firewall (object):
         comes across the connection.
         """
         try:
+            dest_ip = flow.dst
+            connection = self.get_connection_identifier(flow=flow, packet=packet)
             # if dest_ip is to be monitored for search strings
             if str(dest_ip) in self.monitored_strings:
                 log.debug("Monitoring Connection %s for search terms %s" %(str(connection),
                         str(self.monitored_strings[str(dest_ip)])))
-                connection = self.get_connection_identifier(flow=flow, packet=packet)
                 self.setup_connection(connection=connection, packet=packet) 
+                self.update_connection(packet=packet, reverse=False)
                 event.action.monitor_forward = True
                 event.action.monitor_backward = True
                 return
@@ -299,10 +300,13 @@ class Firewall (object):
             # if banned domain:
             domain = self.get_domain_name_from_packet(packet=packet)
             if domain and domain in self.banned_domains:
+                log.debug("Denied domain %s because its banned!!" %(str(domain)))
                 event.action.deny = True
                 return
 
+            # if everything goes well,
             log.debug("Allowed Connection %s" %(str(connection))  )
+            event.action.forward =True
 
         except Exception, e:
             log.debug("!!!!!!!!!!!!!ERROR (deferred in): %s" %(str(e)))
