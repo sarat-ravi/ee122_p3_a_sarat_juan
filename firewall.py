@@ -37,6 +37,8 @@ class Firewall (object):
         # dict {<connection_tuple>: <connection_info_dict>}
         self.connection_data = {}
 
+        self.ip_to_domain = {}
+
         self.var_log("Banned Ports", self.banned_ports)
         self.var_log("Banned Domains", self.banned_domains)
         #self.var_log("Monitored Strings", self.monitored_strings)
@@ -93,25 +95,37 @@ class Firewall (object):
         """
         self.monitor_domain(packet=packet)
 
-    def update_connection(self, packet):
+    def update_connection(self, packet, reverse):
         """
         takes an connection identifier (tuple uniquely identifying connection)
         and updates the information we have on this connection so far
         """
+        packet_content = self.get_packet_content(packet=packet)
         connection = self.get_connection_identifier(packet=packet)
+
+        if reverse:
+            """
+            switch source and destination in tuple!!
+            """
+            destip, destport, srcip, srcport = connection
+            connection = (srcip, srcport, destip, destport)
+            #log.debug("Data returned: %s" %(str(packet_content)))
+
+        if not connection in self.connection_data:
+            log.debug("!!!!!!!!Cant Update for connection %s" %(str(connection)))
+            return 
+
         connection_info = self.connection_data[connection]
         now = time.time()
 
-        packet_content = self.get_packet_content(packet=packet)
-
         connection_info["last_modified"] = now
-        connection_info["content"] += packet_content
 
-        # TODO: Create a timer to nuke the dict entry above
-        # NOTE: This "time" must somehow be extended based on "last_modified"
-        # NOTE: the search query must be run when the connection dies!!
+        if reverse:
+            connection_info["reverse_content"] += packet_content
+        else:
+            connection_info["content"] += packet_content
 
-        log.debug("Updating connection %s at %d" %(str(connection), now))
+        #log.debug("Updating connection %s at %d" %(str(connection), now))
 
     def _handle_MonitorData(self, event, packet, reverse):
         """
@@ -119,26 +133,28 @@ class Firewall (object):
         Called when data passes over the connection if monitoring
         has been enabled by a prior event handler.
         """
-        if reverse:
-            """
-            Monitor Incoming Packets
-            """
-            #log.debug("Monitoring Reverse")
-            # IP bans invalid domain name responses
-            self.monitor_response(packet=packet)
-        else:
-            """
-            Monitor Outgoing Packets
-            """
-            #log.debug("Monitoring Forward")
-            # IP bans invalid domain name requests
-            self.monitor_request(packet=packet)
+        try:
+            if reverse:
+                """
+                Monitor Incoming Packets
+                """
+                # IP bans invalid domain name responses
+                self.monitor_response(packet=packet)
+                #log.debug("Monitoring Reverse")
+                self.update_connection(packet=packet, reverse=reverse)
+                #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
+            else:
+                """
+                Monitor Outgoing Packets
+                """
+                # IP bans invalid domain name requests
+                self.monitor_request(packet=packet)
+                #log.debug("Monitoring Forward")
+                self.update_connection(packet=packet, reverse=reverse)
+                #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
 
-        """
-        Common Case Code Here: to run for both forward and reverse cases
-        """
-        self.update_connection(packet=packet)
-        #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
+        except Exception, e:
+            log.debug("ERROR!!!!!!!!!!!!! %s for reverse = " %(str(e), str(reverse)))
 
         return
 
@@ -149,10 +165,8 @@ class Firewall (object):
         by the search strings
         """
 
-        # TODO: actually imlement this
-        return "sarat"
-
-
+        http_data = packet.payload.payload.payload
+        return str(http_data)
 
     def delete_idle_connection(self, connection):
         """
@@ -160,26 +174,37 @@ class Firewall (object):
         connection entry in self.connection_data if idle for more than
         30 seconds
         """
-        connection_data = self.connection_data[connection]
+        try:
+            connection_data = self.connection_data[connection]
 
-        now = time.time()
-        last_modified = connection_data["last_modified"]
+            now = time.time()
+            last_modified = connection_data["last_modified"]
 
-        # if the last packet was 30 seconds ago,
-        timedelta = now - last_modified
-        log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
+            # if the last packet was 30 seconds ago,
+            timedelta = now - last_modified
+            log.debug("Delete connection %s called with timedelta %d" %(str(connection), timedelta))
 
-        # if idle more than 30 seconds,
-        if timedelta >= 30:
+            # print domain name for debugging purposes
+            srcip, srcport, destip, destport = connection
+            domain = ""
+            if str(destip) in self.ip_to_domain:
+                domain = self.ip_to_domain[str(destip)]
 
-            # delete entry
-            log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
-            log.debug("-----Connection Data: %s" %(str(connection_data)))
+            # if idle more than 30 seconds,
+            if timedelta >= 27:
 
-            # Kill the timer
-            connection_data["timer"].cancel()
+                # delete entry
+                log.debug("----------------------------------------------------------------------------------------------")
+                log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
+                log.debug("-----Connection Data: (%s) %s" %(str(domain), str(connection_data)))
+                log.debug("----------------------------------------------------------------------------------------------")
 
-            return False
+                # Kill the timer
+                connection_data["timer"].cancel()
+
+                return False
+        except Exception, e:
+            log.debug("ERROR!!!!!!!!!!!!! (delete idle conn): %s" %(str(e)))
 
         return True
 
@@ -210,6 +235,7 @@ class Firewall (object):
         connection_data["creation_time"] = now
         connection_data["last_modified"] = now 
         connection_data["content"] = ""
+        connection_data["reverse_content"] = ""
         connection_data["timer"] = timer
 
         self.connection_data[connection] = connection_data
@@ -225,39 +251,61 @@ class Firewall (object):
         You can alter what happens with the connection by altering the
         action property of the event.
         """
-        connection = self.get_connection_identifier(flow=flow, packet=packet)
+        try:
+            connection = self.get_connection_identifier(flow=flow, packet=packet)
 
-        dest_ip = flow.dst
+            dest_ip = flow.dst
 
-        # ban requests for banned domains
-        if str(dest_ip) in self.banned_ips:
-            log.debug("Denied IP %s" %(str(dest_ip)))
-            event.action.deny = True
-            return
+            # ban requests for banned domains
+            if str(dest_ip) in self.banned_ips:
+                log.debug("Denied IP %s" %(str(dest_ip)))
+                event.action.deny = True
+                return
 
-        # ban invalid ports
-        dest_port = int(flow.dstport)
-        if self.is_invalid_or_banned_port(port=dest_port):
-            log.debug("Denied Connection %s because port %d is invalid" %(str(connection), dest_port)  )
-            event.action.deny = True
-            return
+            # ban invalid ports
+            dest_port = int(flow.dstport)
+            if self.is_invalid_or_banned_port(port=dest_port):
+                log.debug("Denied Connection %s because port %d is invalid" %(str(connection), dest_port)  )
+                event.action.deny = True
+                return
 
-        # if dest_ip is to be monitored for search strings
-        if str(dest_ip) in self.monitored_strings:
-            log.debug("Monitoring Connection %s for search terms %s" %(str(connection)),
-                    str(self.monitored_strings[str(dest_ip)]))
-            connection = self.setup_connection(connection=connection, packet=packet) 
-            event.action.forward = True
-            event.action.monitor_forward = True
-            event.action.monitor_reverse = True
-            return
 
-        # default behavior for every normal connection
-        log.debug("Allowed Connection %s" %(str(connection))  )
-        self.setup_connection(connection=connection, packet=packet) 
-        event.action.monitor_reverse = True
-        event.action.monitor_forward = True
-        # sarat
+            # default behavior for every normal connection
+            #log.debug("Allowed Connection %s" %(str(connection))  )
+            event.action.defer = True
+            #event.action.monitor_forward = True
+            #event.action.monitor_backward = True
+        except Exception, e:
+            log.debug("!!!!!!!!!!!!!ERROR (connection in): %s" %(str(e)))
+
+    def _handle_DeferredConnectionIn (self, event, flow, packet):
+        """
+        Deferred connection event handler.
+        If the initial connection handler defers its decision, this
+        handler will be called when the first actual payload data
+        comes across the connection.
+        """
+        try:
+            # if dest_ip is to be monitored for search strings
+            if str(dest_ip) in self.monitored_strings:
+                log.debug("Monitoring Connection %s for search terms %s" %(str(connection),
+                        str(self.monitored_strings[str(dest_ip)])))
+                connection = self.get_connection_identifier(flow=flow, packet=packet)
+                self.setup_connection(connection=connection, packet=packet) 
+                event.action.monitor_forward = True
+                event.action.monitor_backward = True
+                return
+
+            # if banned domain:
+            domain = self.get_domain_name_from_packet(packet=packet)
+            if domain and domain in self.banned_domains:
+                event.action.deny = True
+                return
+
+            log.debug("Allowed Connection %s" %(str(connection))  )
+
+        except Exception, e:
+            log.debug("!!!!!!!!!!!!!ERROR (deferred in): %s" %(str(e)))
 
     def is_invalid_or_banned_port(self, port):
         """
@@ -274,14 +322,6 @@ class Firewall (object):
 
         return False
 
-    def _handle_DeferredConnectionIn (self, event, flow, packet):
-        """
-        Deferred connection event handler.
-        If the initial connection handler defers its decision, this
-        handler will be called when the first actual payload data
-        comes across the connection.
-        """
-        pass
 
     def monitor_domain(self, packet):
         """
@@ -317,6 +357,7 @@ class Firewall (object):
         if not domain_name == '':
             hostname = domain_name.split(".")[-2]
             self.var_log("Domain Name", hostname)
+
 
         return hostname
 
@@ -432,6 +473,11 @@ class Firewall (object):
         # return misc http info
         result_dict = {}
         result_dict["domain_name"] = domain
+
+        connection = self.get_connection_identifier(packet=packet)
+        srcip, srcport, destip, destport = connection
+        self.ip_to_domain[str(destip)] = domain
+
         return result_dict
 
     def get_connection_identifier(self, flow=None, packet=None):
