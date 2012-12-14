@@ -101,6 +101,7 @@ class Firewall (object):
         and updates the information we have on this connection so far
         """
         packet_content = self.get_packet_content(packet=packet)
+        #packet_content = str(packet_content)
         connection = self.get_connection_identifier(packet=packet)
 
         if reverse:
@@ -118,14 +119,14 @@ class Firewall (object):
         connection_info = self.connection_data[connection]
         now = time.time()
 
-        connection_info["last_modified"] = now
+        self.connection_data[connection]["last_modified"] = now
 
         if reverse:
-            connection_info["reverse_content"] += packet_content
+            self.connection_data[connection]["reverse_content"] += packet_content
         else:
-            connection_info["content"] += packet_content
+            self.connection_data[connection]["content"] += packet_content
 
-        #log.debug("Updating connection %s at %d" %(str(connection), now))
+        log.debug("Updating connection %s at %d, added '%s'" %(str(connection), now, packet_content))
 
     def _handle_MonitorData(self, event, packet, reverse):
         """
@@ -139,7 +140,7 @@ class Firewall (object):
                 Monitor Incoming Packets
                 """
                 # IP bans invalid domain name responses
-                self.monitor_response(packet=packet)
+                #self.monitor_response(packet=packet)
                 #log.debug("Monitoring Reverse")
                 self.update_connection(packet=packet, reverse=reverse)
                 #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
@@ -148,7 +149,7 @@ class Firewall (object):
                 Monitor Outgoing Packets
                 """
                 # IP bans invalid domain name requests
-                self.monitor_request(packet=packet)
+                #self.monitor_request(packet=packet)
                 #log.debug("Monitoring Forward")
                 self.update_connection(packet=packet, reverse=reverse)
                 #log.debug("Monitoring Data. Reverse = %s" %(str(reverse)))
@@ -164,9 +165,8 @@ class Firewall (object):
         the http content. This represents the "body" to be searched
         by the search strings
         """
-
         http_data = packet.payload.payload.payload
-        return str(http_data)
+        return http_data
 
     def delete_idle_connection(self, connection):
         """
@@ -198,6 +198,14 @@ class Firewall (object):
                 log.debug("Deleting Connection %s because connection idle for %d seconds" %(str(connection), timedelta))
                 log.debug("-----Connection Data: (%s) %s" %(str(domain), str(connection_data)))
                 log.debug("----------------------------------------------------------------------------------------------")
+
+                #f = open("/root/pox/ext/sarat.txt", "w")
+                #import json
+                #data = {"request": connection_data["content"],
+                        #"response": connection_data["reverse_content"]}
+                #js = json.dumps(data)
+                #f.write(js)
+                #f.close()
 
                 # Kill the timer
                 connection_data["timer"].cancel()
